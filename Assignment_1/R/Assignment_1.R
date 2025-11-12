@@ -10,6 +10,7 @@ library(dplyr)
 library(ggplot2)
 library(maps)
 library(styler)
+library(rlang)
 
 ## Housekeeping ####
 
@@ -19,8 +20,20 @@ library(styler)
 # styler::style_file("Assignment_1.R")
 data.b <- read_tsv(file = "../data/water_bear.tsv")
 
+#Check for parsing issues (TA suggestion / quality check)
+parse_issues <- problems(data.b)  # Lists rows with parsing issues
+cat("Total rows with parsing issues:", nrow(parse_issues), "\n")
+head(parse_issues, 20)
 
-
+#Summary statistics for exploratory analysis to gain an understanding of data structure
+summary_stats <- data.b %>%
+  summarise(
+    n_total = n(),
+    n_bins = n_distinct(bin_uri),
+    n_species = n_distinct(species, na.rm = TRUE),
+    ratio_bins_species = n_bins / n_species
+  )
+print(summary_stats)
 
 # Data manipulation + cleaning ####
 # The Coordinates in the dataset columns had square brackets, a comma, and were not separated into 2 columns by latitude and longitude. This code removes the special characters and separates the coordinates into 2 columns and recognizes the values as numeric. The original cood column remains in the dataset for reproducabiltiy
@@ -35,8 +48,10 @@ data.b$lat <- as.numeric(data.b$lat)
 data.b$long <- as.numeric(data.b$long)
 
 ## Graph - Specimen collection site on Globe ####
-# Raw data inputted into the map to identify collection hotspots and investigate distribution patterns by region. Collection site does not equal distribution patterns. This graph was inspired by the maps package using stackoverflow for help.  https://stackoverflow.com/questions/23130604/plot-coordinates-on-map
-world_map <- map_data("world")
+# Map plotting with cleaned data to avoid NA errors. The map visualizes specimen collection sites across the globe, overlaying points on country polygons to show geographic distribution.
+# Filter first, then pass to ggplot
+data_clean <- data.b %>% 
+  filter(!is.na(lat) & !is.na(long))
 
 ggplot() +
   geom_polygon(
@@ -44,7 +59,8 @@ ggplot() +
     fill = "lightblue", color = "gray70", alpha = 0.5
   ) +
   geom_point(
-    data = data.b, aes(x = long, y = lat),
+    data = data_clean,  # <- now guaranteed to have lat/long
+    aes(x = long, y = lat),
     color = "red", alpha = 0.5
   ) +
   labs(title = "Specimen Locations on Globe", x = "Longitude", y = "Latitude") +
@@ -108,44 +124,42 @@ bin_country %>%
   theme_minimal() +
   theme(plot.title = element_text(hjust = 0.5))
 
+  ## Define reusable histogram function ####
 
+plot_lat_hist <- function(df, bin_col = "bin_uri", lat_filter = 0, title_suffix = "", unique_only = TRUE) {
+  bin_sym <- rlang::sym(bin_col)
+  
+  df_plot <- df
+  if (unique_only) {
+    df_plot <- df_plot %>% distinct(!!bin_sym, .keep_all = TRUE)
+  }
+  
+  df_plot %>%
+    filter(lat > lat_filter) %>%
+    ggplot(aes(x = lat)) +
+    geom_histogram(bins = 100, fill = "blue", color = "white") +
+    labs(
+      title = paste("Distribution of", title_suffix),
+      x = "Latitude (°)", y = "Frequency"
+    ) +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5))
+  
 ## Graph - Distribution of BIN's by Latitude North of the Equator ####
-# https://ggplot2.tidyverse.org/reference/geom_histogram.html
+  
+plot_lat_hist(data.b, title_suffix = "BINs by Latitude (North of Equator)", unique_only = FALSE)
 
-data.b %>%
-  filter(!is.na(lat), lat > 0) %>%
-  ggplot(aes(x = lat)) +
-  geom_histogram(
-    bins = 100,
-    fill = "blue",
-    color = "white"
-  ) +
-  labs(
-    title = "Distribution of BINs by Latitude (North of Equator)",
-    x = "Latitude (°N)",
-    y = "Frequency"
-  ) +
-  theme_minimal() +
-  theme(plot.title = element_text(hjust = 0.5))
+##Correlation test : provides a quantitative assessment of the relationship between geographic position and biodiversity
+df_lat <- richness.bands %>%
+  mutate(lat_mid = (as.numeric(sub("-.*", "", lat_band)) + as.numeric(sub(".*-", "", lat_band)))/2)
+
+cor_test <- cor.test(df_lat$lat_mid, df_lat$BIN_richness)
+cor_test  # ==> Gives correlation coefficient and p-value
+
+#Results: correlation coefficient (r = 0.07) and a p-value of 0.88.This means the relationship between latitude and BIN richness is very weak and statistically non-significant.The small sample size and broad confidence interval indicate limited statistical power, meaning that even if a trend exists, the available data are insufficient to confirm it.
 
 ## Graph - distribution of unique bins north of the equator by latitude  ####
-# https://ggplot2.tidyverse.org/reference/geom_histogram.html
-data.b %>%
-  distinct(bin_uri, .keep_all = TRUE) %>%
-  filter(lat > 0) %>%
-  ggplot(aes(x = lat)) +
-  geom_histogram(
-    bins = 100,
-    fill = "blue",
-    color = "white"
-  ) +
-  labs(
-    title = "Distribution of Unique BINs North of the Equator Latitude",
-    x = "Latitude (°)",
-    y = "Frequency"
-  ) +
-  theme_minimal() +
-  theme(plot.title = element_text(hjust = 0.5))
+plot_lat_hist(data.b, title_suffix = "Unique BINs North of the Equator Latitude", unique_only = TRUE)
 
 ## Graph - BIN richness across latitude bands north of the equator ####
 
@@ -175,4 +189,6 @@ ggplot(richness.bands, aes(x = lat_band, y = BIN_richness)) +
   ) +
   theme(plot.title = element_text(hjust = 0.5)) +
   scale_y_continuous(limits = c(0, 200))
+
+
 
